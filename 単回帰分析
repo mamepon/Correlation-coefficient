@@ -1,0 +1,22 @@
+import pandas as pd
+df = pd.read_csv('ファイルパス')
+
+x = df[['x']]
+y = df[['y']]
+from sklearn.linear_model import LinearRegression
+
+model_lr = LinearRegression()
+model_lr.fit(x, y)
+import matplotlib.pyplot as plt
+fig = plt.figure()
+ax = fig.add_subplot(111)
+ax.set_xlabel('x', fontsize = 12)
+ax.set_ylabel('y', fontsize = 12)
+plt.plot(x, y,'o')
+plt.plot(x, model_lr.predict(x), linestyle="solid")
+plt.show()
+
+print('モデル関数の回帰変数 w1: %.3f' %model_lr.coef_)
+print('モデル関数の切片 w2: %.3f' %model_lr.intercept_)
+print('y= %.3fx + %.3f' % (model_lr.coef_ , model_lr.intercept_))
+print('決定係数 R^2： ', model_lr.score(x, y))
