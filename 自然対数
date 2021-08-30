@@ -1,0 +1,7 @@
+import pandas as pd
+import math
+
+print(df['x'])
+df = pd.read_csv('ファイルパス')
+df['x'] = df['x'].apply(lambda x: math.exp(x))
+print(df['x'])
