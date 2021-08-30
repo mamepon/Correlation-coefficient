@@ -1,0 +1,15 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df = pd.read_csv('')
+
+fig = plt.figure()
+ax = fig.add_subplot(111)
+ax.set_xlabel('横軸名前', fontsize = 12)
+ax.set_ylabel('縦軸名前', fontsize = 12)
+
+x = df['x']
+y = df['y']
+z = df['z']
+aaa = ax.scatter(x, y, c=z)
+plt.show()
