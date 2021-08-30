@@ -1,0 +1,26 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df = pd.read_csv('ファイルパス')
+
+from sklearn.decomposition import PCA
+pca = PCA(n_components=2)
+df = df[['x','y']]
+pca.fit(df)
+
+import numpy as np
+print(pca.explained_variance_ratio_)
+print(np.cumsum(pca.explained_variance_ratio_))
+print(pca.components_ * np.sqrt(pca.explained_variance_)[:, np.newaxis])
+x = df['x']
+score = pd.DataFrame(pca.transform(df), index=x.index)
+print(score)
+
+df['PC1'] = score[0]
+x = df['PC1']
+print(x)
+df['PC2'] = score[1]
+y = df['PC2']
+
+aaa = ax.scatter(x, y)
+plt.show()
