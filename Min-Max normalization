@@ -1,0 +1,6 @@
+import pandas as pd
+import math
+df = pd.read_csv('ファイルパス')
+
+f_maxmin = lambda x: math.log(x)
+df['x'] = df['x'].apply(f_maxmin)
