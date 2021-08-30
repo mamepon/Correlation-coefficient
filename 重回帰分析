@@ -1,0 +1,35 @@
+import pandas as pd
+df = pd.read_csv('ファイルパス')
+
+x = df[['x1', 'x2']]
+y = df[['y']]
+x1 = df[['x1']]
+x2 = df[['x2']]
+
+from sklearn.linear_model import LinearRegression
+import numpy as np
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+model_lr = LinearRegression()
+model_lr.fit(x, y)
+
+fig= plt.figure()
+ax=Axes3D(fig)
+
+ax.scatter3D(x1, x2, y)
+ax.set_xlabel("x1")
+ax.set_ylabel("x2")
+ax.set_zlabel("y")
+
+mesh_x1 = np.arange(x1.min()[0], x1.max()[0], (x1.max()[0]-x1.min()[0])/20)
+mesh_x2 = np.arange(x2.min()[0], x2.max()[0], (x2.max()[0]-x2.min()[0])/20)
+mesh_x1, mesh_x2 = np.meshgrid(mesh_x1, mesh_x2)
+mesh_y = model_lr.coef_[0][0] * mesh_x1 + model_lr.coef_[0][1] * mesh_x2 + model_lr.intercept_[0]
+ax.plot_wireframe(mesh_x1, mesh_x2, mesh_y)
+plt.show()
+
+print(model_lr.coef_)
+print(model_lr.intercept_)
+print(model_lr.score(x, y))
