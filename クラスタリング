@@ -1,0 +1,22 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+
+df = pd.read_csv('ファイルパス')
+
+from sklearn import preprocessing
+df['x'] = preprocessing.scale(df['x'])
+df['y'] = preprocessing.scale(df['y'])
+
+df2 = df[['x','y']]
+
+x = df['x']
+y = df['y']
+
+from sklearn.cluster import KMeans
+cls = KMeans(n_clusters= n)
+result = cls.fit(df2)
+
+plt.scatter(x,y, c=result.labels_)
+plt.xlabel('x')
+plt.ylabel('y')
+plt.show()
