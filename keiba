@@ -1,0 +1,948 @@
+#import
+
+import pandas as pd
+import numpy as np
+from bisect import bisect
+
+
+# csvファイルの読み込み
+df = pd.read_csv('/Users/hirokazusato/Downloads/keibadata (1).csv', encoding='cp932')
+
+#タイム0を削除
+df = df[df["タイム"] != 0]
+
+#障害レースの削除
+df = df[df["芝ダ障害コード"] != 3]
+
+#上がり0の馬を削除
+df = df.dropna(subset=['後３Ｆタイム'])
+df = df.reset_index(drop=True)
+
+#繰り返し数
+#全部やる場合はlen(df)
+p = len(df)
+
+#出遅の欠損値を0に置換
+df = df.fillna({'出遅': 0})
+
+#その他設定
+pd.set_option('display.max_columns', 50)
+
+############################## 枠 ############################################################
+
+#枠の追加 but 通常の枠とは異なる!!
+
+df['枠'] = df['馬番']/df['頭数']
+df.loc[(df['枠'] > 0.875) & (df['枠'] <= 1), '枠'] = 8
+df.loc[(df['枠'] > 0) & (df['枠'] <= 0.125), '枠'] = 1
+df.loc[(df['枠'] > 0.125) & (df['枠'] <= 0.25), '枠'] = 2
+df.loc[(df['枠'] > 0.25) & (df['枠'] <= 0.375), '枠'] = 3
+df.loc[(df['枠'] > 0.375) & (df['枠'] <= 0.5), '枠'] = 4
+df.loc[(df['枠'] > 0.5) & (df['枠'] <= 0.625), '枠'] = 5
+df.loc[(df['枠'] > 0.625) & (df['枠'] <= 0.75), '枠'] = 6
+df.loc[(df['枠'] > 0.75) & (df['枠'] <= 0.875), '枠'] = 7
+
+
+############################## 馬場状態変更 ############################################################
+
+#馬場状態の置き換え
+df = df.replace('速良', '良')
+df = df.replace('遅良', '良')
+df = df.replace('速稍重', '稍重')
+df = df.replace('遅稍重', '稍重')
+df = df.replace('速重', '重')
+df = df.replace('遅重', '重')
+df = df.replace('速不良', '不良')
+df = df.replace('遅不良', '不良')
+
+
+############################## タイム ############################################################
+
+
+#タイム変換
+
+df['タイム'] = df['タイム'].astype(str)
+time = df['タイム'].str.zfill(6)
+df['タイム'] = df['タイム'].astype(float)
+time_a = time.str[0]
+time_b = time.str[1]
+time_c = time.str[2]
+time_d = time.str[3]
+time_a = time_a.astype(float)
+time_b = time_b.astype(float)
+time_c = time_c.astype(float)
+time_d = time_d.astype(float)
+df['タイム'] = (time_a*60) + (time_b*10) + time_c + (time_d*0.1)
+df['タイム'] = df['タイム'].astype(float)
+
+#出遅れ補正
+df['補正タイム'] = df['タイム']
+df['出遅れ補正'] = 0.0
+start_late = df.groupby(['芝ダ障害コード','距離','場コード', '出遅'], as_index=False)
+df['出遅れ別平均'] = start_late['タイム'].transform(lambda x: x.mean())
+df['出遅れ0平均'] = df['出遅れ別平均']
+df_a = df.loc[df['出遅'] == 0].groupby(['芝ダ障害コード', '距離', '場コード']).mean()
+df_b = df.drop('出遅れ別平均', axis=1).merge(df_a, left_on=['芝ダ障害コード', '距離', '場コード'], right_index=True)
+df['出遅れ0平均'] = df_b['出遅れ別平均']
+df['出遅れ補正'] = df['出遅れ別平均'] - df['出遅れ0平均']
+df['補正タイム'] = df['タイム'] - df['出遅れ補正']
+
+#テン３Ｆタイム出遅れ補正
+df['前３Ｆタイム'] = df['前３Ｆタイム']/10
+df['補正テン３Ｆタイム'] = df['前３Ｆタイム']
+df['テン３Ｆ出遅れ補正'] = 0.0
+start_late_f = df.groupby(['芝ダ障害コード','距離','場コード', '出遅'], as_index=False)
+df['テン３Ｆ出遅れ別平均'] = start_late_f['前３Ｆタイム'].transform(lambda x: x.mean())
+df['テン３Ｆ出遅れ0平均'] = df['テン３Ｆ出遅れ別平均']
+df_a_f = df.loc[df['出遅'] == 0].groupby(['芝ダ障害コード', '距離', '場コード']).mean()
+df_b_f = df.drop('テン３Ｆ出遅れ別平均', axis=1).merge(df_a_f, left_on=['芝ダ障害コード', '距離', '場コード'], right_index=True)
+df['テン３Ｆ出遅れ0平均'] = df_b_f['テン３Ｆ出遅れ別平均']
+df['テン３Ｆ出遅れ補正'] = df['テン３Ｆ出遅れ別平均'] - df['テン３Ｆ出遅れ0平均']
+df['補正テン３Ｆタイム'] = df['前３Ｆタイム'] - df['テン３Ｆ出遅れ補正']
+
+#上がり３Ｆタイム出遅れ補正
+df['後３Ｆタイム'] = df['後３Ｆタイム']/10
+df['補正上がり３Ｆタイム'] = df['後３Ｆタイム']
+df['上がり３Ｆ出遅れ補正'] = 0.0
+start_late_b = df.groupby(['芝ダ障害コード','距離','場コード', '出遅'], as_index=False)
+df['上がり３Ｆ出遅れ別平均'] = start_late_b['後３Ｆタイム'].transform(lambda x: x.mean())
+df['上がり３Ｆ出遅れ0平均'] = df['上がり３Ｆ出遅れ別平均']
+df_a_b = df.loc[df['出遅'] == 0].groupby(['芝ダ障害コード', '距離', '場コード']).mean()
+df_b_b = df.drop('上がり３Ｆ出遅れ別平均', axis=1).merge(df_a_b, left_on=['芝ダ障害コード', '距離', '場コード'], right_index=True)
+df['上がり３Ｆ出遅れ0平均'] = df_b_b['上がり３Ｆ出遅れ別平均']
+df['上がり３Ｆ出遅れ補正'] = df['上がり３Ｆ出遅れ別平均'] - df['上がり３Ｆ出遅れ0平均']
+df['補正上がり３Ｆタイム'] = df['後３Ｆタイム'] - df['上がり３Ｆ出遅れ補正']
+
+#パーセンタイル
+#結果のタイムが同条件の中のどのぐらいのパーセンタイルに位置するか
+df['タイムパーセンタイル'] = 0.0
+percentile = df['補正タイム'].groupby([df['芝ダ障害コード'], df['距離'], df['場コード'], df['条件'], df['種別'], df['性別コード'], df['斤量']])
+df['条件別レース数'] = percentile.transform(lambda x: x.count())
+df['条件別レースランク'] = percentile.transform(lambda x: x.rank())
+df['タイムパーセンタイル'] = (df['条件別レース数'] - df['条件別レースランク'])/df['条件別レース数']
+
+#馬場補正用タイム
+#馬場補正用タイムはその日の馬場から算出された期待値
+#馬場補正用タイムとの差はその日の馬場の期待値よりどれだけ速いのかの値
+df['馬場補正用タイム'] = 0.0
+df['馬場補正用タイムとの差'] = 0.0
+df['馬場パーセンタイル平均'] = 0.0
+correction = df['タイムパーセンタイル'].groupby([df['芝ダ障害コード'], df['場コード'], df['年月日']])
+df['馬場パーセンタイル平均'] = correction.transform(lambda x: x.mean())
+
+
+def per_time(pt):
+    res = pt['補正タイム'].quantile(pt['馬場パーセンタイル平均'])
+    res.index = pt.index
+    return res
+
+
+df['馬場補正用タイム'] = df.groupby(['芝ダ障害コード', '距離', '場コード', '条件', '種別', '性別コード', '斤量'], group_keys=False).apply(per_time)
+df['馬場補正用タイムとの差'] = df['馬場補正用タイム'] - df['補正タイム']
+
+#出遅れ指数
+df['出遅れ指数'] = 0.0
+
+
+def start_late_index(sla):
+    slat = sla.sort_values('年月日').reset_index()
+    slat['res'] = (slat['出遅れ補正'].cumsum() / (slat.index + 1)).shift(1)
+    return slat.set_index('index')['res']
+
+
+df['出遅れ指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(start_late_index)
+df = df.fillna({'出遅れ指数': 0.0})
+
+#馬場補正タイム指数
+#過去のタイム差からの予測値
+df['タイム指数'] = 0.0
+no_time = df[df['条件'] == 'A1']['馬場補正用タイムとの差']
+no_time = no_time.mean()
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['タイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(time_index)
+df = df.fillna({'タイム指数': no_time})
+df['タイム指数'] = df['タイム指数'] - df['出遅れ指数']
+
+#予測タイム
+#平均値に指数を足したもの
+df['予想タイム'] = 0.0
+predict_time = df['補正タイム'].groupby([df['芝ダ障害コード'], df['距離'], df['場コード'], df['条件'], df['種別']])
+df['予想タイム'] = predict_time.transform(lambda x: x.mean())
+df['予想タイム'] = df['予想タイム'] - df['タイム指数']
+
+#レースタイム指数
+#当該レースにおける馬の速さ指数の予測値
+df['レースタイム指数'] = 0.0
+predict_time_in_race = df['予想タイム'].groupby([df['場コード'], df['年月日'], df['Ｒ']])
+df['レースタイム指数'] = predict_time_in_race.transform(lambda x: x.mean())
+df['レースタイム指数'] = df['レースタイム指数'] - df['予想タイム']
+
+#レース結果指数
+df['レース結果指数'] = 0.0
+result_time_in_race = df['馬場補正用タイムとの差'].groupby([df['場コード'], df['年月日'], df['Ｒ']])
+df['レース結果指数'] = result_time_in_race.transform(lambda x: x.mean())
+
+#前走のタイム
+#過去５走のタイム指数データの追加
+df['前走馬場補正用タイムとの差'] = 0.0
+no_time_a = df[df['条件'] == 'A1']['馬場補正用タイムとの差']
+no_time_a = no_time_a.mean()
+
+
+def pre_index_a(pia):
+    piat = pia.sort_values('年月日').reset_index()
+    piat['res'] = piat['馬場補正用タイムとの差'].shift(1)
+    return piat.set_index('index')['res']
+
+
+df['前走馬場補正用タイムとの差'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_a)
+df = df.fillna({'前走馬場補正用タイムとの差': no_time_a})
+
+df['前走タイム指数'] = 0.0
+no_time_b = df[df['条件'] == 'A1']['タイム指数']
+no_time_b = no_time_b.mean()
+
+
+def pre_index_b(pib):
+    pibt = pib.sort_values('年月日').reset_index()
+    pibt['res'] = pibt['タイム指数'].shift(1)
+    return pibt.set_index('index')['res']
+
+
+df['前走タイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_b)
+df = df.fillna({'前走タイム指数': no_time_b})
+
+df['前走レースタイム指数'] = 0.0
+no_time_c = df[df['条件'] == 'A1']['レースタイム指数']
+no_time_c = no_time_c.mean()
+
+
+def pre_index_c(pic):
+    pict = pic.sort_values('年月日').reset_index()
+    pict['res'] = pict['レースタイム指数'].shift(1)
+    return pict.set_index('index')['res']
+
+
+df['前走レースタイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_c)
+df = df.fillna({'前走レースタイム指数': no_time_c})
+
+df['前走レース結果指数'] = 0.0
+no_time_d = df[df['条件'] == 'A1']['レース結果指数']
+no_time_d = no_time_d.mean()
+
+
+def pre_index_d(pid):
+    pidt = pid.sort_values('年月日').reset_index()
+    pidt['res'] = pidt['レース結果指数'].shift(1)
+    return pidt.set_index('index')['res']
+
+
+df['前走レース結果指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_d)
+df = df.fillna({'前走レース結果指数': no_time_d})
+
+############################## 前３Ｆタイム ############################################################
+
+#テン３Ｆタイムパーセンタイル
+#結果のタイムが同条件の中のどのぐらいのパーセンタイルに位置するか
+df['テン３Ｆタイムパーセンタイル'] = 0.0
+percentile_f = df['補正テン３Ｆタイム'].groupby([df['芝ダ障害コード'], df['距離'], df['場コード'], df['条件'], df['種別']])
+df['条件別テン３Ｆ数'] = percentile_f.transform(lambda x: x.count())
+df['条件別テン３Ｆランク'] = percentile_f.transform(lambda x: x.rank())
+df['テン３Ｆタイムパーセンタイル'] = (df['条件別テン３Ｆ数'] - df['条件別テン３Ｆランク'])/df['条件別テン３Ｆ数']
+
+#馬場補正用タイム
+#馬場補正用タイムはその日の馬場から算出された期待値
+#馬場補正用タイムとの差はその日の馬場の期待値よりどれだけ速いのかの値
+df['馬場補正用テン３Ｆタイム'] = 0.0
+df['馬場補正用テン３Ｆタイムとの差'] = 0.0
+df['馬場テン３Ｆタイムパーセンタイル平均'] = 0.0
+correction_f = df['テン３Ｆタイムパーセンタイル'].groupby([df['芝ダ障害コード'], df['場コード'], df['年月日']])
+df['馬場テン３Ｆタイムパーセンタイル平均'] = correction_f.transform(lambda x: x.mean())
+
+
+def per_time_f(ptf):
+    res = ptf['補正テン３Ｆタイム'].quantile(ptf['馬場テン３Ｆタイムパーセンタイル平均'])
+    res.index = ptf.index
+    return res
+
+
+df['馬場補正用テン３Ｆタイム'] = df.groupby(['芝ダ障害コード', '距離', '場コード', '条件', '種別'], group_keys=False).apply(per_time_f)
+df['馬場補正用テン３Ｆタイムとの差'] = df['馬場補正用テン３Ｆタイム'] - df['補正テン３Ｆタイム']
+
+#テン３Ｆ出遅れ指数
+df['テン３Ｆ出遅れ指数'] = 0.0
+
+
+def start_late_index_f(slaf):
+    slatf = slaf.sort_values('年月日').reset_index()
+    slatf['res'] = (slatf['テン３Ｆ出遅れ補正'].cumsum() / (slatf.index + 1)).shift(1)
+    return slatf.set_index('index')['res']
+
+
+df['テン３Ｆ出遅れ指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(start_late_index_f)
+df = df.fillna({'テン３Ｆ出遅れ指数': 0.0})
+
+#馬場補正タイム指数
+#過去のタイム差からの予測値
+df['テン３Ｆタイム指数'] = 0.0
+no_time_f = df[df['条件'] == 'A1']['馬場補正用テン３Ｆタイムとの差']
+no_time_f = no_time_f.mean()
+
+
+def time_index_f(tif):
+    titf = tif.sort_values('年月日').reset_index()
+    titf['res'] = (titf['馬場補正用テン３Ｆタイムとの差'].cumsum() / (titf.index + 1)).shift(1)
+    return titf.set_index('index')['res']
+
+
+df['テン３Ｆタイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(time_index_f)
+df = df.fillna({'テン３Ｆタイム指数': no_time_f})
+df['テン３Ｆタイム指数'] = df['テン３Ｆタイム指数'] - df['テン３Ｆ出遅れ指数']
+
+#予測タイム
+#平均値に指数を足したもの
+df['予想テン３Ｆタイム'] = 0.0
+predict_time_f = df['補正テン３Ｆタイム'].groupby([df['芝ダ障害コード'], df['距離'], df['場コード'], df['条件'], df['種別']])
+df['予想テン３Ｆタイム'] = predict_time_f.transform(lambda x: x.mean())
+df['予想テン３Ｆタイム'] = df['予想テン３Ｆタイム'] - df['テン３Ｆタイム指数']
+
+#レースタイム指数
+#当該レースにおける馬の速さ指数の予測値
+df['レーステン３Ｆタイム指数'] = 0.0
+predict_time_in_race_f = df['予想テン３Ｆタイム'].groupby([df['場コード'], df['年月日'], df['Ｒ']])
+df['レーステン３Ｆタイム指数'] = predict_time_in_race_f.transform(lambda x: x.mean())
+df['レーステン３Ｆタイム指数'] = df['レーステン３Ｆタイム指数'] - df['予想テン３Ｆタイム']
+
+# レース結果指数
+df['レース結果テン３Ｆ指数'] = 0.0
+result_time_in_race_f = df['馬場補正用テン３Ｆタイムとの差'].groupby([df['場コード'], df['年月日'], df['Ｒ']])
+df['レース結果テン３Ｆ指数'] = result_time_in_race_f.transform(lambda x: x.mean())
+
+#前走のタイム
+#過去５走のタイム指数データの追加
+df['前走馬場補正用テン３Ｆタイムとの差'] = 0.0
+no_time_a_f = df[df['条件'] == 'A1']['馬場補正用テン３Ｆタイムとの差']
+no_time_a_f = no_time_a_f.mean()
+
+
+def pre_index_a_f(piaf):
+    piatf = piaf.sort_values('年月日').reset_index()
+    piatf['res'] = piatf['馬場補正用テン３Ｆタイムとの差'].shift(1)
+    return piatf.set_index('index')['res']
+
+
+df['前走馬場補正用テン３Ｆタイムとの差'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_a_f)
+df = df.fillna({'前走馬場補正用テン３Ｆタイムとの差': no_time_a_f})
+
+
+df['前走テン３Ｆタイム指数'] = 0.0
+no_time_b_f = df[df['条件'] == 'A1']['テン３Ｆタイム指数']
+no_time_b_f = no_time_b_f.mean()
+
+
+def pre_index_b_f(pibf):
+    pibtf = pibf.sort_values('年月日').reset_index()
+    pibtf['res'] = pibtf['テン３Ｆタイム指数'].shift(1)
+    return pibtf.set_index('index')['res']
+
+
+df['前走テン３Ｆタイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_b_f)
+df = df.fillna({'前走テン３Ｆタイム指数': no_time_b_f})
+
+df['前走レーステン３Ｆタイム指数'] = 0.0
+no_time_c_f = df[df['条件'] == 'A1']['レーステン３Ｆタイム指数']
+no_time_c_f = no_time_c_f.mean()
+
+
+def pre_index_c_f(picf):
+    pictf = picf.sort_values('年月日').reset_index()
+    pictf['res'] = pictf['レーステン３Ｆタイム指数'].shift(1)
+    return pictf.set_index('index')['res']
+
+
+df['前走レーステン３Ｆタイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_c_f)
+df = df.fillna({'前走レーステン３Ｆタイム指数': no_time_c_f})
+
+df['前走レース結果テン３Ｆ指数'] = 0.0
+no_time_d_f = df[df['条件'] == 'A1']['レース結果テン３Ｆ指数']
+no_time_d_f = no_time_d_f.mean()
+
+
+def pre_index_d_f(pidf):
+    pidtf = pidf.sort_values('年月日').reset_index()
+    pidtf['res'] = pidtf['レース結果テン３Ｆ指数'].shift(1)
+    return pidtf.set_index('index')['res']
+
+
+df['前走レース結果テン３Ｆ指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_d_f)
+df = df.fillna({'前走レース結果テン３Ｆ指数': no_time_d_f})
+
+############################## 後３Ｆタイム ############################################################
+
+#上がり３Ｆタイムパーセンタイル
+#結果のタイムが同条件の中のどのぐらいのパーセンタイルに位置するか
+df['上がり３Ｆタイムパーセンタイル'] = 0.0
+percentile_b = df['補正上がり３Ｆタイム'].groupby([df['芝ダ障害コード'], df['距離'], df['場コード'], df['条件'], df['種別']])
+df['条件別上がり３Ｆ数'] = percentile_b.transform(lambda x: x.count())
+df['条件別上がり３Ｆランク'] = percentile_b.transform(lambda x: x.rank())
+df['上がり３Ｆタイムパーセンタイル'] = (df['条件別上がり３Ｆ数'] - df['条件別上がり３Ｆランク'])/df['条件別上がり３Ｆ数']
+
+#馬場補正用タイム
+#馬場補正用タイムはその日の馬場から算出された期待値
+#馬場補正用タイムとの差はその日の馬場の期待値よりどれだけ速いのかの値
+df['馬場補正用上がり３Ｆタイム'] = 0.0
+df['馬場補正用上がり３Ｆタイムとの差'] = 0.0
+
+df['馬場上がり３Ｆタイムパーセンタイル平均'] = 0.0
+correction_b = df['上がり３Ｆタイムパーセンタイル'].groupby([df['芝ダ障害コード'], df['場コード'], df['年月日']])
+df['馬場上がり３Ｆタイムパーセンタイル平均'] = correction_b.transform(lambda x: x.mean())
+
+
+def per_time_b(ptb):
+    res = ptb['補正上がり３Ｆタイム'].quantile(ptb['馬場上がり３Ｆタイムパーセンタイル平均'])
+    res.index = ptb.index
+    return res
+
+
+df['馬場補正用上がり３Ｆタイム'] = df.groupby(['芝ダ障害コード', '距離', '場コード', '条件', '種別'], group_keys=False).apply(per_time_b)
+df['馬場補正用上がり３Ｆタイムとの差'] = df['馬場補正用上がり３Ｆタイム'] - df['補正上がり３Ｆタイム']
+
+#上がり３Ｆ出遅れ指数
+df['上がり３Ｆ出遅れ指数'] = 0.0
+
+
+def start_late_index_b(slab):
+    slatb = slab.sort_values('年月日').reset_index()
+    slatb['res'] = (slatb['テン３Ｆ出遅れ補正'].cumsum() / (slatb.index + 1)).shift(1)
+    return slatb.set_index('index')['res']
+
+
+df['上がり３Ｆ出遅れ指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(start_late_index_b)
+df = df.fillna({'上がり３Ｆ出遅れ指数': 0.0})
+
+#テン３Ｆ馬場補正タイム指数
+#過去のタイム差からの予測値
+df['上がり３Ｆタイム指数'] = 0.0
+no_time_b = df[df['条件'] == 'A1']['馬場補正用上がり３Ｆタイムとの差']
+no_time_b = no_time_b.mean()
+
+
+def time_index_b(tib):
+    titb = tib.sort_values('年月日').reset_index()
+    titb['res'] = (titb['馬場補正用上がり３Ｆタイムとの差'].cumsum() / (titb.index + 1)).shift(1)
+    return titb.set_index('index')['res']
+
+
+df['上がり３Ｆタイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(time_index_b)
+df = df.fillna({'上がり３Ｆタイム指数': no_time_b})
+df['上がり３Ｆタイム指数'] = df['上がり３Ｆタイム指数'] - df['上がり３Ｆ出遅れ指数']
+
+#予測タイム
+#平均値に指数を足したもの
+df['予想上がり３Ｆタイム'] = 0.0
+predict_time_b = df['補正上がり３Ｆタイム'].groupby([df['芝ダ障害コード'], df['距離'], df['場コード'], df['条件'], df['種別']])
+df['予想上がり３Ｆタイム'] = predict_time_b.transform(lambda x: x.mean())
+df['予想上がり３Ｆタイム'] = df['予想上がり３Ｆタイム'] - df['上がり３Ｆタイム指数']
+
+#レースタイム指数
+#当該レースにおける馬の速さ指数の予測値
+df['レース上がり３Ｆタイム指数'] = 0.0
+predict_time_in_race_b = df['予想テン３Ｆタイム'].groupby([df['場コード'], df['年月日'], df['Ｒ']])
+df['レース上がり３Ｆタイム指数'] = predict_time_in_race_b.transform(lambda x: x.mean())
+df['レース上がり３Ｆタイム指数'] = df['レース上がり３Ｆタイム指数'] - df['予想上がり３Ｆタイム']
+
+# レース結果上がり３Ｆ指数
+df['レース結果上がり３Ｆ指数'] = 0.0
+result_time_in_race_b = df['馬場補正用上がり３Ｆタイムとの差'].groupby([df['場コード'], df['年月日'], df['Ｒ']])
+df['レース結果上がり３Ｆ指数'] = result_time_in_race_b.transform(lambda x: x.mean())
+
+#前走のタイム
+#過去５走のタイム指数データの追加
+df['前走馬場補正用上がり３Ｆタイムとの差'] = 0.0
+no_time_a_b = df[df['条件'] == 'A1']['馬場補正用上がり３Ｆタイムとの差']
+no_time_a_b = no_time_a_b.mean()
+
+
+def pre_index_a_b(piab):
+    piatb = piab.sort_values('年月日').reset_index()
+    piatb['res'] = piatb['馬場補正用上がり３Ｆタイムとの差'].shift(1)
+    return piatb.set_index('index')['res']
+
+
+df['前走馬場補正用上がり３Ｆタイムとの差'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_a_b)
+df = df.fillna({'前走馬場補正用上がり３Ｆタイムとの差': no_time_a_b})
+
+df['前走上がり３Ｆタイム指数'] = 0.0
+no_time_b_b = df[df['条件'] == 'A1']['上がり３Ｆタイム指数']
+no_time_b_b = no_time_b_b.mean()
+
+
+def pre_index_b_b(pibb):
+    pibtb = pibb.sort_values('年月日').reset_index()
+    pibtb['res'] = pibtb['上がり３Ｆタイム指数'].shift(1)
+    return pibtb.set_index('index')['res']
+
+
+df['前走上がり３Ｆタイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_b_b)
+df = df.fillna({'前走上がり３Ｆタイム指数': no_time_b_b})
+
+df['前走レース上がり３Ｆタイム指数'] = 0.0
+no_time_c_b = df[df['条件'] == 'A1']['レース上がり３Ｆタイム指数']
+no_time_c_b = no_time_c_b.mean()
+
+
+def pre_index_c_b(picb):
+    pictb = picb.sort_values('年月日').reset_index()
+    pictb['res'] = pictb['レース上がり３Ｆタイム指数'].shift(1)
+    return pictb.set_index('index')['res']
+
+
+df['前走レース上がり３Ｆタイム指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_c_b)
+df = df.fillna({'前走レース上がり３Ｆタイム指数': no_time_c_b})
+
+df['前走レース結果上がり３Ｆ指数'] = 0.0
+no_time_d_b = df[df['条件'] == 'A1']['レース結果上がり３Ｆ指数']
+no_time_d_b = no_time_d_b.mean()
+
+
+def pre_index_d_b(pidb):
+    pidtb = pidb.sort_values('年月日').reset_index()
+    pidtb['res'] = pidtb['レース結果上がり３Ｆ指数'].shift(1)
+    return pidtb.set_index('index')['res']
+
+
+df['前走レース結果上がり３Ｆ指数'] = df.groupby(['血統登録番号'], group_keys=False).apply(pre_index_d_b)
+df = df.fillna({'前走レース結果上がり３Ｆ指数': no_time_d_b})
+
+############################## 同一条件指数 ############################################################
+
+df['同一条件指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['同一条件指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '場コード', '距離', '馬場状態'], group_keys=False).apply(time_index)
+df = df.fillna({'同一条件指数': 0.0})
+df['同一条件指数'] = df['同一条件指数'] - df['出遅れ指数']
+
+############################## 馬場指数 ############################################################
+
+df['馬場状態指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['馬場状態指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '馬場状態'], group_keys=False).apply(time_index)
+df = df.fillna({'馬場状態指数': 0.0})
+df['馬場状態指数'] = df['馬場状態指数'] - df['出遅れ指数']
+
+############################## 場所距離指数 ############################################################
+
+df['場所距離指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['場所距離指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '場コード', '距離'], group_keys=False).apply(time_index)
+df = df.fillna({'場所距離指数': 0.0})
+df['場所距離指数'] = df['場所距離指数'] - df['出遅れ指数']
+
+############################## 場所指数 ############################################################
+
+df['場所指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['場所指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '場コード'], group_keys=False).apply(time_index)
+df = df.fillna({'場所指数': 0.0})
+df['場所指数'] = df['場所指数'] - df['出遅れ指数']
+
+############################## 距離指数 ############################################################
+
+df['距離指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['距離指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '距離'], group_keys=False).apply(time_index)
+df = df.fillna({'距離指数': 0.0})
+df['距離指数'] = df['距離指数'] - df['出遅れ指数']
+
+############################## 右左指数 ############################################################
+
+df['右左指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['右左指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '右左'], group_keys=False).apply(time_index)
+df = df.fillna({'右左指数': 0.0})
+df['右左指数'] = df['右左指数'] - df['出遅れ指数']
+
+############################## 騎手指数 ############################################################
+
+df['騎手指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['騎手指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '場コード', '距離', '条件', '種別', '騎手名'], group_keys=False).apply(time_index)
+df = df.fillna({'騎手指数': 0.0})
+df['騎手指数'] = df['騎手指数'] - df['出遅れ指数']
+
+############################## 調教師指数 ############################################################
+
+df['調教師指数'] = 0.0
+
+
+def time_index(ti):
+    tit = ti.sort_values('年月日').reset_index()
+    tit['res'] = (tit['馬場補正用タイムとの差'].cumsum() / (tit.index + 1)).shift(1)
+    return tit.set_index('index')['res']
+
+
+df['調教師指数'] = df.groupby(['血統登録番号', '芝ダ障害コード', '場コード', '距離', '条件', '種別', '調教師名'], group_keys=False).apply(time_index)
+df = df.fillna({'調教師指数': 0.0})
+df['調教師指数'] = df['調教師指数'] - df['出遅れ指数']
+
+df['調教師指数'] = 0.0
+g_baba = df['馬場補正用タイムとの差'].groupby([df['芝ダ障害コード'], df['場コード'], df['距離'], df['条件'], df['種別'], df['調教師名']])
+df['調教師指数'] = g_baba.transform(lambda x: x.mean())
+
+'''
+############################## 種牡馬指数 ############################################################
+
+df['種牡馬指数'] = 0.0
+g_baba = df['馬場補正用３Ｆタイムとの差'].groupby([df['芝ダ障害コード'], df['場コード'], df['距離'], df['条件'], df['種別'], df['調教師名']])
+df['種牡馬指数'] = g_baba.transform(lambda x: x.mean())
+
+for i in range(p):
+    x = df[(df['芝ダ障害コード'] == df.at[i, '芝ダ障害コード']) & (df['距離'] == df.at[i, '距離']) & (df['場コード'] == df.at[i, '場コード']) & (df['調教師名'] == df.at[i, '調教師名']) & (df['年月日'] < df.at[i, '年月日'])]['馬場補正用上がり３Ｆタイムとの差']
+    if x.count() == 0:
+        continue
+    else:
+        df.at[i, '種牡馬指数'] = x.mean()
+
+'''
+df.to_csv('/Users/hirokazusato/Desktop/KEIBA AI/機械学習用データ/前処理済み.csv', encoding='utf_8_sig')
+
+print('前処理完了!')
+
+############################## 位置取り ############################################################
+
+#道中の位置取り予測
+#数字は内からの列数
+
+df['道中位置取り'] = 0
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 1
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 1
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 2
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 2
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 3
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 3
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 4
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 4
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 5
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 5
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 6
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 6
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 7
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 7
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 8
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 8
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 9
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 9
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 10
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 10
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 11
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 11
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 12
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 12
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 13
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 13
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 14
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 14
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13) & (df['道中位置取り'] != 14)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13) & (df['道中位置取り'] != 14)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 15
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 15
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13) & (df['道中位置取り'] != 14) & (df['道中位置取り'] != 15)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13) & (df['道中位置取り'] != 14) & (df['道中位置取り'] != 15)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 16
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 16
+            else:
+                continue
+
+for i in range(p):
+    if df.at[i, '条件'] == 'A1' or df.at[i, '道中位置取り'] != 0:
+        continue
+    else:
+        x = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13) & (df['道中位置取り'] != 14) & (df['道中位置取り'] != 15) & (df['道中位置取り'] != 16)]['テン３Ｆタイム指数']
+        y = x.count()
+        z = df[(df['場コード'] == df.at[i, '場コード']) & (df['年'] == df.at[i, '年']) & (df['回'] == df.at[i, '回']) & (df['日'] == df.at[i, '日']) & (df['Ｒ'] == df.at[i, 'Ｒ']) & (df.at[i, 'テン３Ｆタイム指数'] - 0.2 < df['テン３Ｆタイム指数']) & (df['テン３Ｆタイム指数'] < df.at[i, 'テン３Ｆタイム指数'] + 0.2) & (df['道中位置取り'] != 1) & (df['道中位置取り'] != 2) & (df['道中位置取り'] != 3) & (df['道中位置取り'] != 4) & (df['道中位置取り'] != 5) & (df['道中位置取り'] != 6) & (df['道中位置取り'] != 7) & (df['道中位置取り'] != 8) & (df['道中位置取り'] != 9) & (df['道中位置取り'] != 10) & (df['道中位置取り'] != 11) & (df['道中位置取り'] != 12) & (df['道中位置取り'] != 13) & (df['道中位置取り'] != 14) & (df['道中位置取り'] != 15) & (df['道中位置取り'] != 16)]['馬番']
+
+        if y == 1:
+            df.at[i, '道中位置取り'] = 17
+        else:
+            if df.at[i, '馬番'] == z.min():
+                df.at[i, '道中位置取り'] = 17
+            else:
+                continue
+
+print(df['道中位置取り'].value_counts())
+print(df['道中位置取り'].isnull().values.sum())
+df.to_csv('/Users/hirokazusato/Desktop/競馬データ/機械学習用データ/位置取り.csv', encoding='utf_8_sig')
+print('位置取りシートの元データ完了！')
